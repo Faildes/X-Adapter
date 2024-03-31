@@ -111,6 +111,85 @@ def load_lora(pipeline, lora_model_path, alpha):
         for item in pair_keys:
             visited.append(item)
 
+def lora_c(lora_path, base, sdxl, vae_path, adapter_path, output_path):
+    device = 'cuda'
+    weight_dtype = torch.float16
+    
+    torch.set_grad_enabled(False)
+    torch.backends.cudnn.benchmark = True
+
+    # load adapter
+    adapter = Adapter_XL()
+    ckpt = torch.load(adapter_path)
+    adapter.load_state_dict(ckpt)
+    print('successfully load adapter')
+    # load SD1.5
+    noise_scheduler_sd1_5 = DDPMScheduler.from_pretrained(
+        base, subfolder="scheduler"
+    )
+    tokenizer_sd1_5 = CLIPTokenizer.from_pretrained(
+        base, subfolder="tokenizer", revision=None
+    )
+    text_encoder_sd1_5 = CLIPTextModel.from_pretrained(
+        base, subfolder="text_encoder", revision=None
+    )
+    vae_sd1_5 = AutoencoderKL.from_pretrained(
+        base, subfolder="vae", revision=None
+    )
+    unet_sd1_5 = UNet2DConditionModel.from_pretrained(
+        base, subfolder="unet", revision=None
+    )
+    print('successfully load SD1.5')
+    # load SDXL
+    tokenizer_one = AutoTokenizer.from_pretrained(
+        sdxl, subfolder="tokenizer", revision=None, use_fast=False
+    )
+    tokenizer_two = AutoTokenizer.from_pretrained(
+        sdxl, subfolder="tokenizer_2", revision=None, use_fast=False
+    )
+    # import correct text encoder classes
+    text_encoder_cls_one = import_model_class_from_model_name_or_path(
+        sdxl, None
+    )
+    text_encoder_cls_two = import_model_class_from_model_name_or_path(
+        sdxl, None, subfolder="text_encoder_2"
+    )
+    # Load scheduler and models
+    noise_scheduler = DDPMScheduler.from_pretrained(sdxl, subfolder="scheduler")
+    text_encoder_one = text_encoder_cls_one.from_pretrained(
+        sdxl, subfolder="text_encoder", revision=None
+    )
+    text_encoder_two = text_encoder_cls_two.from_pretrained(
+        sdxl, subfolder="text_encoder_2", revision=None
+    )
+    vae = AutoencoderKL.from_pretrained(
+        vae_path, revision=None
+    )
+    unet = UNet2DConditionModel.from_pretrained(
+        sdxl, subfolder="unet", revision=None
+    )
+    print('successfully load SDXL')
+
+    with torch.inference_mode():
+        pipe = StableDiffusionXLAdapterPipeline(
+            vae=vae,
+            text_encoder=text_encoder_one,
+            text_encoder_2=text_encoder_two,
+            tokenizer=tokenizer_one,
+            tokenizer_2=tokenizer_two,
+            unet=unet,
+            scheduler=noise_scheduler,
+            vae_sd1_5=vae_sd1_5,
+            text_encoder_sd1_5=text_encoder_sd1_5,
+            tokenizer_sd1_5=tokenizer_sd1_5,
+            unet_sd1_5=unet_sd1_5,
+            scheduler_sd1_5=noise_scheduler_sd1_5,
+            adapter=adapter,
+        )
+        # load lora
+        load_lora(pipe, lora_path, 1)
+        pipe.save_lora_weights(output_path)
+        print('successfully saved lora')
 
 def inference_lora(args):
     device = 'cuda'
@@ -244,9 +323,3 @@ def inference_lora(args):
                     img.save(
                         f"{args.save_path}/{prompt[:10]}_{i}_ags_{adapter_guidance_start:.2f}_acs_{adapter_condition_scale:.2f}.png")
     print(f"results saved in {args.save_path}")
-
-
-
-
-
-
